@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Rotterdam Cloud Native sample - API
+
+Parameters:
+    Stage:
+        Type: String
+        Description: Stage name for the environment
+        Default: dev
+        AllowedValues:
+            - sandbox
+            - dev
+            - sit
+            - prod
+    LogRetentionInDays:
+        Type: Number
+        Default: 14
+        Description: CloudWatch Logs retention period
+
+Conditions:
+    isProduction: !Equals [!Ref Stage, prod]
+
+Globals:
+    Function:
+        Timeout: 5
+        MemorySize: 256
+        Runtime: python3.9
+        Tracing: Active
+        Environment:
+            Variables:
+                LOG_LEVEL: INFO
+                # NOTE: Dynamically sets LOG_LEVEL to DEBUG for 10% of concurrent requests
+                POWERTOOLS_LOGGER_SAMPLE_RATE: 0.1
+                # NOTE: Powertools can log incoming events to help troubleshooting
+                # though here we disable it if Stage parameter is `prod`
+                POWERTOOLS_LOGGER_LOG_EVENT: !If [isProduction, false, true]
+                POWERTOOLS_METRICS_NAMESPACE: RotterdamDemo
+                POWERTOOLS_SERVICE_NAME: payment
+    Api:
+        TracingEnabled: true
+
+Resources:
+    #
+    # Project level Lambda Layer to speed up build
+    #
+
+    ProjectSharedLibsLayer:
+        Type: AWS::Serverless::LayerVersion
+        Properties:
+            ContentUri: lambda_layers
+            CompatibleRuntimes:
+                - python3.9
+        Metadata:
+            BuildMethod: python3.9
+
+    #
+    # Payment collection Lambda function
+    #
+
+    CollectPaymentFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            Handler: payment.app.lambda_handler
+            CodeUri: src
+            Description: Payment sample function
+            Layers:
+                - !Ref ProjectSharedLibsLayer
+            Environment:
+                Variables:
+                    STAGE: !Ref Stage
+            Policies:
+                - DynamoDBCrudPolicy:
+                      TableName: !Ref IdempotencyTable
+            Events:
+                HelloRoute:
+                    Type: Api
+                    Properties:
+                        Path: /hello
+                        Method: GET
+                CollectPayment:
+                    Type: Api
+                    Properties:
+                        Path: /collect
+                        Method: POST
+    #
+    # Payment Collection Function Logs
+    #
+
+    CollectPaymentFunctionLogs:
+        Type: AWS::Logs::LogGroup
+        Properties:
+            LogGroupName: !Sub "/aws/lambda/${CollectPaymentFunction}"
+            RetentionInDays: !Ref LogRetentionInDays
+
+    #
+    # Service Map containing resources useful for Integ/E2E test and Inventory
+    #
+
+    ResourcesMapParameter:
+        Type: AWS::SSM::Parameter
+        Properties:
+            Name: !Sub "/${Stage}/service/sample_payment/test/config"
+            Type: String
+            Description: Service Map with common resources used for integ/e2e testing
+            Value: !Sub |
+                {
+                    "CollectPaymentFunction": "${CollectPaymentFunction}",
+                    "PaymentApiEndpoint": "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ServerlessRestApi.Stage}",
+                    "Stage": "${Stage}"
+                }
+
+    #
+    # Optional - Idempotency
+    #
+
+    IdempotencyTable:
+        Type: AWS::DynamoDB::Table
+        Properties:
+            AttributeDefinitions:
+                - AttributeName: id
+                  AttributeType: S
+            KeySchema:
+                - AttributeName: id
+                  KeyType: HASH
+            TimeToLiveSpecification:
+                AttributeName: expiration
+                Enabled: true
+            BillingMode: PAY_PER_REQUEST
+
+Outputs:
+    PaymentEndpoint:
+        Description: Payment API Endpoint
+        Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${ServerlessRestApi.Stage}"
+
+    CollectPaymentFunction:
+        Description: Collect payment Lambda Function ARN
+        Value: !GetAtt CollectPaymentFunction.Arn
+
+    PaymentIdempotencyStore:
+        Description: Idempotency token storage for payment requests
+        Value: !GetAtt IdempotencyTable.Arn

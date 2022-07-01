@@ -1,0 +1,11 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "rotterdam-pt"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1pssy5gdxqcao"
+s3_prefix = "rotterdam-pt"
+region = "eu-west-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Stage=\"dev\" LogRetentionInDays=\"14\" RedactedPolicyRetentionInSeconds=\"864000\""
+image_repositories = []

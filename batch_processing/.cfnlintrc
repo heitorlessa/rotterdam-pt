@@ -1,0 +1,4 @@
+templates:
+    - template.yaml
+ignore_checks:
+    - W3005

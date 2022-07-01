@@ -1,0 +1,31 @@
+{
+    "Policy": {
+        "event_date": "2022-06-30T00:00:00+00:00",
+        "event_effective_date": "2022-06-30T00:00:00+00:00",
+        "insurance_company": "TK/SO",
+        "oldest_driver_dob": "1970-02-18",
+        "youngest_driver_dob": "1970-02-18",
+        "policyholder": {
+            "date_of_birth": "1970-02-18",
+            "email_address": "testclient@test.com",
+            "licence_pass_date": null,
+            "phone_number": "+441112223333",
+            "mobile_number": "01234555666",
+            "full_name": "",
+            "forenames": "Sai",
+            "surname": "Vukkem",
+            "house_name_or_number": "1",
+            "address_line_1": "Main Street",
+            "address_line_2": "Somewhere",
+            "address_line_3": "Address 3",
+            "postcode": "CC488D"
+        },
+        "policy_number": "test",
+        "renewal_date": "2014-09-01T00:00:00+01:00",
+        "starting_score": 50,
+        "status": "Confirmed",
+        "transaction_type": "NewBusiness",
+        "cover_start_date": "2022-01-01T16:40:10.918+00:00",
+        "end_date": "2022-12-31T16:40:10.919+00:00"
+    }
+}

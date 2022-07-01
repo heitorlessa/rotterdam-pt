@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Rotterdam Cloud Native sample
+
+Parameters:
+    Stage:
+        Type: String
+        Description: Stage name for the environment
+        Default: dev
+        AllowedValues:
+            - sandbox
+            - dev
+            - sit
+            - prod
+    LogRetentionInDays:
+        Type: Number
+        Default: 14
+        Description: CloudWatch Logs retention period
+
+Conditions:
+    isProduction: !Equals [!Ref Stage, prod]
+
+Globals:
+    Function:
+        Timeout: 5
+        MemorySize: 1769 # 1 full vCPU for encryption work https://docs.aws.amazon.com/lambda/latest/dg/configuration-function-common.html#configuration-memory-console
+        Runtime: python3.9
+        Tracing: Active
+        Environment:
+            Variables:
+                LOG_LEVEL: INFO
+                # NOTE: Dynamically sets LOG_LEVEL to DEBUG for 10% of concurrent requests
+                POWERTOOLS_LOGGER_SAMPLE_RATE: 0.1
+                # NOTE: Powertools can log incoming events to help troubleshooting
+                # though here we disable it if Stage parameter is `prod`
+                POWERTOOLS_LOGGER_LOG_EVENT: !If [isProduction, false, true]
+                POWERTOOLS_METRICS_NAMESPACE: PolicyProcessing
+                POWERTOOLS_SERVICE_NAME: policy-masking
+
+Resources:
+    #
+    # Project level Lambda Layer to speed up build
+    # NOTE: this also allows us to use SAM Accelerate (make watch)
+    # while building libraries with C-Bindings (think Pandas, cryptography etc)
+    #
+
+    ProjectSharedLibsLayer:
+        Type: AWS::Serverless::LayerVersion
+        Properties:
+            ContentUri: lambda_layers
+            CompatibleRuntimes:
+                - python3.9
+        Metadata:
+            BuildMethod: python3.9
+
+    #
+    # Policy Masking Lambda function
+    #
+
+    PolicyMaskingFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            Handler: policy_masking.app.lambda_handler
+            CodeUri: src
+            Description: Policy request masking function
+            Layers:
+                - !Ref ProjectSharedLibsLayer
+            Environment:
+                Variables:
+                    STAGE: !Ref Stage
+                    IDEMPOTENCY_TABLE: !Ref IdempotencyTable
+            Policies:
+                - SQSPollerPolicy:
+                      QueueName: !GetAtt PolicyQueue.QueueName
+                - DynamoDBCrudPolicy:
+                      TableName: !Ref IdempotencyTable
+            Events:
+                Batch:
+                    Type: SQS
+                    Properties:
+                        Queue: !GetAtt PolicyQueue.Arn
+                        FunctionResponseTypes:
+                            - ReportBatchItemFailures
+
+    #
+    # DLQ for Policy requests that failed to be processed
+    #
+
+    UnhandledPolicyQueue:
+        Type: AWS::SQS::Queue
+
+    PolicyQueue:
+        Type: AWS::SQS::Queue
+        Properties:
+            VisibilityTimeout: 30 # Fn timeout * 6
+            RedrivePolicy:
+                maxReceiveCount: 2
+                deadLetterTargetArn: !GetAtt UnhandledPolicyQueue.Arn
+
+    #
+    # Policy Masking Function Logs expiration
+    #
+
+    PolicyMaskingFunctionLogs:
+        Type: AWS::Logs::LogGroup
+        Properties:
+            LogGroupName: !Sub "/aws/lambda/${PolicyMaskingFunction}"
+            RetentionInDays: !Ref LogRetentionInDays
+
+    #
+    # Service Map containing resources useful for Integ/E2E test and Inventory
+    #
+
+    ResourcesMapParameter:
+        Type: AWS::SSM::Parameter
+        Properties:
+            Name: !Sub "/${Stage}/service/policy_masking/test/config"
+            Type: String
+            Description: Service Map with common resources used for integ/e2e testing
+            Value: !Sub |
+                {
+                    "PolicyMaskingFunction": "${PolicyMaskingFunction}",
+                    "PolicyQueue": "${PolicyQueue}",
+                    "Stage": "${Stage}"
+                }
+
+    #
+    # Idempotency
+    #
+
+    IdempotencyTable:
+        Type: AWS::DynamoDB::Table
+        Properties:
+            AttributeDefinitions:
+                - AttributeName: id
+                  AttributeType: S
+            KeySchema:
+                - AttributeName: id
+                  KeyType: HASH
+            TimeToLiveSpecification:
+                AttributeName: expiration
+                Enabled: true
+            BillingMode: PAY_PER_REQUEST
+
+Outputs:
+    PolicyMaskingFunction:
+        Description: Policy Masking Lambda Function ARN
+        Value: !GetAtt PolicyMaskingFunction.Arn
+
+    PolicyQueue:
+        Description: Policy SQS Queue URL
+        Value: !Ref PolicyQueue
+
+    UnhandledPolicyQueue:
+        Description: DLQ for Policy Queue
+        Value: !Ref UnhandledPolicyQueue
+
+    PolicyIdempotencyStore:
+        Description: Idempotency token storage for policy requests
+        Value: !GetAtt IdempotencyTable.Arn
